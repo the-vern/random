@@ -1,0 +1,247 @@
+===== FILE: create_test_data.py =====
+import pandas as pd
+import numpy as np
+
+def generate_test_data(
+    n_polygons=200,
+    start_date="2024-01-01 00:00:00",
+    end_date="2024-01-02 00:00:00",
+    mode="uniform",            # "uniform" or "bursty"
+    n_bursts=5,                 # used only if mode="bursty"
+    burst_width_minutes=20,     # spread (std dev) of points within each burst
+    repeat_fraction=0.0,        # fraction of unique polygons that get multiple records
+    max_repeats=3,               # max number of records for a "repeated" polygon
+    seed=42
+):
+    """
+    Generate a test dataframe with 'id' and 'datetime' columns.
+    Total number of rows = n_polygons (some ids may repeat if repeat_fraction > 0).
+
+    Parameters
+    ----------
+    n_polygons : int
+        Total number of records (rows) to generate.
+    start_date : str
+        Start of the datetime range, format "%Y-%m-%d %H:%M:%S".
+    end_date : str
+        End of the datetime range, format "%Y-%m-%d %H:%M:%S".
+    mode : str
+        "uniform" - timestamps spread evenly/randomly across the whole range.
+        "bursty"  - timestamps clustered into n_bursts groups ("events")
+                    separated by gaps, simulating real activity patterns.
+    n_bursts : int
+        Number of clusters/events to generate (only used if mode="bursty").
+    burst_width_minutes : float
+        Standard deviation (in minutes) of timestamps within each burst.
+    repeat_fraction : float (0.0 - 1.0)
+        Fraction of *unique* polygon ids that will have multiple records.
+        0.0 = every row is a unique polygon (original behavior).
+        e.g. 0.2 with n_polygons=200 means ~40 unique ids are picked to repeat.
+    max_repeats : int
+        Max number of records a "repeated" polygon can have (randomly between 2 and max_repeats).
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    pd.DataFrame with columns ['id', 'datetime'], total rows == n_polygons
+    """
+    rng = np.random.default_rng(seed)
+
+    start = pd.to_datetime(start_date, format="%Y-%m-%d %H:%M:%S")
+    end = pd.to_datetime(end_date, format="%Y-%m-%d %H:%M:%S")
+
+    if end <= start:
+        raise ValueError("end_date must be after start_date")
+    if not (0.0 <= repeat_fraction <= 1.0):
+        raise ValueError("repeat_fraction must be between 0.0 and 1.0")
+    if max_repeats < 2:
+        raise ValueError("max_repeats must be at least 2")
+
+    total_seconds = (end - start).total_seconds()
+
+    # --- Step 1: figure out how many unique polygon ids we need, and how many
+    # records each one gets, so the total adds up to n_polygons ---
+    if repeat_fraction == 0.0:
+        unique_id_count = n_polygons
+        records_per_id = np.ones(unique_id_count, dtype=int)
+    else:
+        # Start with a guess for unique id count, then adjust so totals match exactly
+        approx_unique = max(1, int(round(n_polygons / (1 + repeat_fraction * (max_repeats - 1) / 2))))
+
+        n_repeating = max(1, int(round(approx_unique * repeat_fraction)))
+        n_repeating = min(n_repeating, approx_unique)
+        n_single = approx_unique - n_repeating
+
+        records_per_id = list(np.ones(n_single, dtype=int))
+        repeat_counts = rng.integers(2, max_repeats + 1, size=n_repeating)
+        records_per_id.extend(repeat_counts)
+        records_per_id = np.array(records_per_id)
+
+        # Adjust total to exactly match n_polygons by trimming/adding single-record ids
+        diff = n_polygons - records_per_id.sum()
+        if diff > 0:
+            records_per_id = np.concatenate([records_per_id, np.ones(diff, dtype=int)])
+        elif diff < 0:
+            # Remove single-record ids first to reduce total; fallback to trimming repeats
+            singles_idx = np.where(records_per_id == 1)[0]
+            n_to_remove = min(len(singles_idx), -diff)
+            if n_to_remove > 0:
+                remove_idx = singles_idx[:n_to_remove]
+                records_per_id = np.delete(records_per_id, remove_idx)
+            remaining_diff = n_polygons - records_per_id.sum()
+            while remaining_diff < 0:
+                # reduce largest repeat count by 1 until totals match
+                max_idx = np.argmax(records_per_id)
+                if records_per_id[max_idx] <= 1:
+                    break
+                records_per_id[max_idx] -= 1
+                remaining_diff += 1
+
+        unique_id_count = len(records_per_id)
+
+    rng.shuffle(records_per_id)  # mix up which ids get multiple records
+
+    # --- Step 2: assign each row to a polygon id according to records_per_id ---
+    ids = []
+    for i, count in enumerate(records_per_id):
+        ids.extend([f"polygon_{i+1}"] * count)
+    ids = np.array(ids)
+
+    n_rows = len(ids)  # should equal n_polygons
+
+    # --- Step 3: generate timestamps for all rows ---
+    if mode == "uniform":
+        random_offsets = rng.uniform(0, total_seconds, size=n_rows)
+
+    elif mode == "bursty":
+        if n_bursts < 1:
+            raise ValueError("n_bursts must be at least 1")
+
+        burst_centers = rng.uniform(0, total_seconds, size=n_bursts)
+        burst_centers.sort()
+
+        burst_assignments = rng.integers(0, n_bursts, size=n_rows)
+        burst_width_seconds = burst_width_minutes * 60
+
+        random_offsets = np.array([
+            burst_centers[b] + rng.normal(0, burst_width_seconds)
+            for b in burst_assignments
+        ])
+        random_offsets = np.clip(random_offsets, 0, total_seconds)
+
+    else:
+        raise ValueError("mode must be 'uniform' or 'bursty'")
+
+    datetimes = [start + pd.Timedelta(seconds=offset) for offset in random_offsets]
+
+    df = pd.DataFrame({
+        "id": ids,
+        "datetime": datetimes
+    })
+
+    # Shuffle row order so repeated ids aren't artificially grouped together
+    df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
+
+    df["datetime"] = pd.to_datetime(df["datetime"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    return df
+
+
+# --- Example usage: bursty data with ~20% of polygons having multiple records ---
+df_bursty = generate_test_data(
+    n_polygons=200,
+    start_date="2024-01-01 00:00:00",
+    end_date="2024-02-01 00:00:00",
+    mode="bursty",
+    n_bursts=6,
+    burst_width_minutes=15,
+    repeat_fraction=0.2,
+    max_repeats=4
+)
+
+print(df_bursty.head(10))
+print(df_bursty.shape)
+print("Unique polygons:", df_bursty['id'].nunique())
+print("Total records:", len(df_bursty))
+print(df_bursty['id'].value_counts().head(10))
+===== FILE: time_binning.py =====
+import pandas as pd
+import numpy as np
+
+# --- assume df has a column 'datetime' as datetime objects (or strings in that format) ---
+df['datetime'] = pd.to_datetime(df['datetime'], format="%Y-%m-%d %H:%M:%S")
+
+# 1. Bin into 10-minute intervals
+df['bin_10min'] = df['datetime'].dt.floor('10min')
+
+# 2. Get the unique 10-min bins, sorted in time order
+unique_bins = pd.Series(sorted(df['bin_10min'].unique()))
+
+# 3. Cluster the unique bins into 6 groups based on temporal proximity.
+#    Using pd.qcut on the bin's numeric (epoch) representation groups
+#    bins so that ones close together in time end up in the same group,
+#    while keeping group sizes balanced.
+bin_epoch = unique_bins.astype('int64')  # nanoseconds since epoch
+group_labels = pd.qcut(bin_epoch, q=6, labels=False, duplicates='drop')
+
+bin_to_group = dict(zip(unique_bins, group_labels))
+
+# 4. Map back to the original dataframe
+df['time_group'] = df['bin_10min'].map(bin_to_group)
+
+print(df[['datetime', 'bin_10min', 'time_group']].head(20))
+print(df['time_group'].value_counts().sort_index())
+===== FILE: time_binning_kmeans.py =====
+import pandas as pd
+import numpy as np
+from sklearn.cluster import KMeans
+from create_test_data import generate_test_data
+
+df = generate_test_data(
+    n_polygons=200,
+    start_date="2024-01-01 00:00:00",
+    end_date="2024-02-01 00:00:00",
+    mode="bursty",
+    n_bursts=6,
+    burst_width_minutes=15,
+    repeat_fraction=0.2,
+    max_repeats=4
+)
+
+# --- assume df has a column 'datetime' as datetime objects (or strings in that format) ---
+df['datetime'] = pd.to_datetime(df['datetime'], format="%Y-%m-%d %H:%M:%S")
+
+# 1. Bin into 10-minute intervals
+df['bin_10min'] = df['datetime'].dt.floor('10min')
+
+# 2. Get unique 10-min bins, sorted in time order
+unique_bins = pd.Series(sorted(df['bin_10min'].unique()))
+bin_epoch = unique_bins.astype('int64').to_numpy().reshape(-1, 1)  # nanoseconds since epoch
+
+# 3. KMeans cluster the unique bins into 6 groups based on time proximity
+kmeans = KMeans(n_clusters=6, random_state=42, n_init=10)
+raw_labels = kmeans.fit_predict(bin_epoch)
+
+# 4. Relabel clusters 0-5 in chronological order (KMeans labels are arbitrary)
+cluster_order = (
+    pd.DataFrame({'bin': unique_bins, 'raw_label': raw_labels})
+    .groupby('raw_label')['bin']
+    .mean()
+    .sort_values()
+    .index
+)
+label_map = {old: new for new, old in enumerate(cluster_order)}
+chrono_labels = [label_map[l] for l in raw_labels]
+
+bin_to_group = dict(zip(unique_bins, chrono_labels))
+
+# 5. Map back to the original dataframe
+df['time_group'] = df['bin_10min'].map(bin_to_group)
+
+print(df[['datetime', 'bin_10min', 'time_group']].head(20))
+print(df['time_group'].value_counts().sort_index())
+
+# Optional: see the time range covered by each group
+group_ranges = df.groupby('time_group')['datetime'].agg(['min', 'max', 'count'])
+print(group_ranges)
