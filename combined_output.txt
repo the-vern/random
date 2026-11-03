@@ -1,247 +1,302 @@
-===== FILE: create_test_data.py =====
-import pandas as pd
-import numpy as np
+===== FILE: s3_manager.py =====
+"""S3 bucket and object management helper built on boto3."""
 
-def generate_test_data(
-    n_polygons=200,
-    start_date="2024-01-01 00:00:00",
-    end_date="2024-01-02 00:00:00",
-    mode="uniform",            # "uniform" or "bursty"
-    n_bursts=5,                 # used only if mode="bursty"
-    burst_width_minutes=20,     # spread (std dev) of points within each burst
-    repeat_fraction=0.0,        # fraction of unique polygons that get multiple records
-    max_repeats=3,               # max number of records for a "repeated" polygon
-    seed=42
-):
+import logging
+import os
+from typing import Dict, Iterator, List, Optional
+
+import boto3
+from botocore.exceptions import ClientError
+
+logger = logging.getLogger(__name__)
+
+
+class S3ManagerError(Exception):
+    """Raised when an S3 operation fails."""
+
+
+class S3Manager:
+    """Wrapper around boto3 for common S3 bucket and object operations.
+
+    Credentials are resolved via the standard boto3 chain (env vars,
+    shared credentials file, IAM role) unless passed explicitly.
     """
-    Generate a test dataframe with 'id' and 'datetime' columns.
-    Total number of rows = n_polygons (some ids may repeat if repeat_fraction > 0).
 
-    Parameters
-    ----------
-    n_polygons : int
-        Total number of records (rows) to generate.
-    start_date : str
-        Start of the datetime range, format "%Y-%m-%d %H:%M:%S".
-    end_date : str
-        End of the datetime range, format "%Y-%m-%d %H:%M:%S".
-    mode : str
-        "uniform" - timestamps spread evenly/randomly across the whole range.
-        "bursty"  - timestamps clustered into n_bursts groups ("events")
-                    separated by gaps, simulating real activity patterns.
-    n_bursts : int
-        Number of clusters/events to generate (only used if mode="bursty").
-    burst_width_minutes : float
-        Standard deviation (in minutes) of timestamps within each burst.
-    repeat_fraction : float (0.0 - 1.0)
-        Fraction of *unique* polygon ids that will have multiple records.
-        0.0 = every row is a unique polygon (original behavior).
-        e.g. 0.2 with n_polygons=200 means ~40 unique ids are picked to repeat.
-    max_repeats : int
-        Max number of records a "repeated" polygon can have (randomly between 2 and max_repeats).
-    seed : int
-        Random seed for reproducibility.
+    def __init__(
+        self,
+        region_name: Optional[str] = None,
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
+        profile_name: Optional[str] = None,
+        endpoint_url: Optional[str] = None,
+    ):
+        session = boto3.session.Session(
+            region_name=region_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            profile_name=profile_name,
+        )
+        self.region_name = session.region_name
+        self.client = session.client("s3", endpoint_url=endpoint_url)
+        self.resource = session.resource("s3", endpoint_url=endpoint_url)
 
-    Returns
-    -------
-    pd.DataFrame with columns ['id', 'datetime'], total rows == n_polygons
-    """
-    rng = np.random.default_rng(seed)
+    # ------------------------------------------------------------------
+    # Bucket operations
+    # ------------------------------------------------------------------
+    def list_buckets(self) -> List[str]:
+        """Return the names of all buckets owned by the account."""
+        try:
+            response = self.client.list_buckets()
+            return [b["Name"] for b in response.get("Buckets", [])]
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to list buckets: {e}") from e
 
-    start = pd.to_datetime(start_date, format="%Y-%m-%d %H:%M:%S")
-    end = pd.to_datetime(end_date, format="%Y-%m-%d %H:%M:%S")
+    def bucket_exists(self, bucket_name: str) -> bool:
+        """Check whether a bucket exists and is accessible."""
+        try:
+            self.client.head_bucket(Bucket=bucket_name)
+            return True
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            if code in ("404", "NoSuchBucket", "NotFound"):
+                return False
+            if code in ("403", "AccessDenied"):
+                logger.warning("Bucket %s exists but access is denied", bucket_name)
+                return True
+            raise S3ManagerError(f"Failed to check bucket {bucket_name}: {e}") from e
 
-    if end <= start:
-        raise ValueError("end_date must be after start_date")
-    if not (0.0 <= repeat_fraction <= 1.0):
-        raise ValueError("repeat_fraction must be between 0.0 and 1.0")
-    if max_repeats < 2:
-        raise ValueError("max_repeats must be at least 2")
+    def create_bucket(self, bucket_name: str, region: Optional[str] = None) -> None:
+        """Create a bucket. Handles the us-east-1 LocationConstraint quirk."""
+        region = region or self.region_name or "us-east-1"
+        try:
+            if region == "us-east-1":
+                self.client.create_bucket(Bucket=bucket_name)
+            else:
+                self.client.create_bucket(
+                    Bucket=bucket_name,
+                    CreateBucketConfiguration={"LocationConstraint": region},
+                )
+            logger.info("Created bucket %s in %s", bucket_name, region)
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to create bucket {bucket_name}: {e}") from e
 
-    total_seconds = (end - start).total_seconds()
+    def delete_bucket(self, bucket_name: str, force: bool = False) -> None:
+        """Delete a bucket. With force=True, empties it first (including versions)."""
+        try:
+            if force:
+                self.empty_bucket(bucket_name)
+            self.client.delete_bucket(Bucket=bucket_name)
+            logger.info("Deleted bucket %s", bucket_name)
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to delete bucket {bucket_name}: {e}") from e
 
-    # --- Step 1: figure out how many unique polygon ids we need, and how many
-    # records each one gets, so the total adds up to n_polygons ---
-    if repeat_fraction == 0.0:
-        unique_id_count = n_polygons
-        records_per_id = np.ones(unique_id_count, dtype=int)
-    else:
-        # Start with a guess for unique id count, then adjust so totals match exactly
-        approx_unique = max(1, int(round(n_polygons / (1 + repeat_fraction * (max_repeats - 1) / 2))))
+    def empty_bucket(self, bucket_name: str) -> None:
+        """Delete all objects (and object versions) in a bucket."""
+        try:
+            bucket = self.resource.Bucket(bucket_name)
+            bucket.objects.all().delete()
+            bucket.object_versions.all().delete()
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to empty bucket {bucket_name}: {e}") from e
 
-        n_repeating = max(1, int(round(approx_unique * repeat_fraction)))
-        n_repeating = min(n_repeating, approx_unique)
-        n_single = approx_unique - n_repeating
+    # ------------------------------------------------------------------
+    # Object operations
+    # ------------------------------------------------------------------
+    def upload_file(
+        self,
+        local_path: str,
+        bucket_name: str,
+        key: Optional[str] = None,
+        extra_args: Optional[Dict] = None,
+    ) -> str:
+        """Upload a local file. Returns the object key used.
 
-        records_per_id = list(np.ones(n_single, dtype=int))
-        repeat_counts = rng.integers(2, max_repeats + 1, size=n_repeating)
-        records_per_id.extend(repeat_counts)
-        records_per_id = np.array(records_per_id)
+        extra_args example: {"ContentType": "image/png", "ACL": "private"}
+        """
+        if not os.path.isfile(local_path):
+            raise FileNotFoundError(f"Local file not found: {local_path}")
+        key = key or os.path.basename(local_path)
+        try:
+            self.client.upload_file(local_path, bucket_name, key, ExtraArgs=extra_args)
+            logger.info("Uploaded %s to s3://%s/%s", local_path, bucket_name, key)
+            return key
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to upload {local_path}: {e}") from e
 
-        # Adjust total to exactly match n_polygons by trimming/adding single-record ids
-        diff = n_polygons - records_per_id.sum()
-        if diff > 0:
-            records_per_id = np.concatenate([records_per_id, np.ones(diff, dtype=int)])
-        elif diff < 0:
-            # Remove single-record ids first to reduce total; fallback to trimming repeats
-            singles_idx = np.where(records_per_id == 1)[0]
-            n_to_remove = min(len(singles_idx), -diff)
-            if n_to_remove > 0:
-                remove_idx = singles_idx[:n_to_remove]
-                records_per_id = np.delete(records_per_id, remove_idx)
-            remaining_diff = n_polygons - records_per_id.sum()
-            while remaining_diff < 0:
-                # reduce largest repeat count by 1 until totals match
-                max_idx = np.argmax(records_per_id)
-                if records_per_id[max_idx] <= 1:
-                    break
-                records_per_id[max_idx] -= 1
-                remaining_diff += 1
+    def upload_bytes(
+        self,
+        data: bytes,
+        bucket_name: str,
+        key: str,
+        content_type: Optional[str] = None,
+    ) -> None:
+        """Upload in-memory bytes as an object."""
+        kwargs = {"Bucket": bucket_name, "Key": key, "Body": data}
+        if content_type:
+            kwargs["ContentType"] = content_type
+        try:
+            self.client.put_object(**kwargs)
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to upload bytes to {key}: {e}") from e
 
-        unique_id_count = len(records_per_id)
+    def download_file(
+        self, bucket_name: str, key: str, local_path: Optional[str] = None
+    ) -> str:
+        """Download an object to disk. Returns the local path."""
+        local_path = local_path or os.path.basename(key)
+        parent = os.path.dirname(local_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        try:
+            self.client.download_file(bucket_name, key, local_path)
+            logger.info("Downloaded s3://%s/%s to %s", bucket_name, key, local_path)
+            return local_path
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to download {key}: {e}") from e
 
-    rng.shuffle(records_per_id)  # mix up which ids get multiple records
+    def get_object_bytes(self, bucket_name: str, key: str) -> bytes:
+        """Read an object's contents into memory."""
+        try:
+            response = self.client.get_object(Bucket=bucket_name, Key=key)
+            return response["Body"].read()
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to get {key}: {e}") from e
 
-    # --- Step 2: assign each row to a polygon id according to records_per_id ---
-    ids = []
-    for i, count in enumerate(records_per_id):
-        ids.extend([f"polygon_{i+1}"] * count)
-    ids = np.array(ids)
+    def get_object_text(
+        self, bucket_name: str, key: str, encoding: str = "utf-8"
+    ) -> str:
+        """Read an object's contents as text."""
+        return self.get_object_bytes(bucket_name, key).decode(encoding)
 
-    n_rows = len(ids)  # should equal n_polygons
+    def delete_file(self, bucket_name: str, key: str) -> None:
+        """Delete a single object."""
+        try:
+            self.client.delete_object(Bucket=bucket_name, Key=key)
+            logger.info("Deleted s3://%s/%s", bucket_name, key)
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to delete {key}: {e}") from e
 
-    # --- Step 3: generate timestamps for all rows ---
-    if mode == "uniform":
-        random_offsets = rng.uniform(0, total_seconds, size=n_rows)
+    def delete_files(self, bucket_name: str, keys: List[str]) -> List[str]:
+        """Delete many objects (batched, 1000 per request). Returns failed keys."""
+        failed: List[str] = []
+        try:
+            for i in range(0, len(keys), 1000):
+                batch = [{"Key": k} for k in keys[i : i + 1000]]
+                response = self.client.delete_objects(
+                    Bucket=bucket_name, Delete={"Objects": batch, "Quiet": True}
+                )
+                failed.extend(err["Key"] for err in response.get("Errors", []))
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to delete objects: {e}") from e
+        return failed
 
-    elif mode == "bursty":
-        if n_bursts < 1:
-            raise ValueError("n_bursts must be at least 1")
+    def file_exists(self, bucket_name: str, key: str) -> bool:
+        """Check whether an object exists."""
+        try:
+            self.client.head_object(Bucket=bucket_name, Key=key)
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise S3ManagerError(f"Failed to check {key}: {e}") from e
 
-        burst_centers = rng.uniform(0, total_seconds, size=n_bursts)
-        burst_centers.sort()
+    def get_file_metadata(self, bucket_name: str, key: str) -> Dict:
+        """Return size, content type, last modified, ETag and user metadata."""
+        try:
+            r = self.client.head_object(Bucket=bucket_name, Key=key)
+            return {
+                "size": r["ContentLength"],
+                "content_type": r.get("ContentType"),
+                "last_modified": r["LastModified"],
+                "etag": r["ETag"].strip('"'),
+                "metadata": r.get("Metadata", {}),
+            }
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to get metadata for {key}: {e}") from e
 
-        burst_assignments = rng.integers(0, n_bursts, size=n_rows)
-        burst_width_seconds = burst_width_minutes * 60
+    def list_files(
+        self, bucket_name: str, prefix: str = "", max_items: Optional[int] = None
+    ) -> List[Dict]:
+        """List objects under a prefix (paginated). Returns key/size/last_modified."""
+        return list(self.iter_files(bucket_name, prefix, max_items))
 
-        random_offsets = np.array([
-            burst_centers[b] + rng.normal(0, burst_width_seconds)
-            for b in burst_assignments
-        ])
-        random_offsets = np.clip(random_offsets, 0, total_seconds)
+    def iter_files(
+        self, bucket_name: str, prefix: str = "", max_items: Optional[int] = None
+    ) -> Iterator[Dict]:
+        """Lazily iterate over objects under a prefix."""
+        paginator = self.client.get_paginator("list_objects_v2")
+        count = 0
+        try:
+            for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+                for obj in page.get("Contents", []):
+                    yield {
+                        "key": obj["Key"],
+                        "size": obj["Size"],
+                        "last_modified": obj["LastModified"],
+                    }
+                    count += 1
+                    if max_items and count >= max_items:
+                        return
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to list files in {bucket_name}: {e}") from e
 
-    else:
-        raise ValueError("mode must be 'uniform' or 'bursty'")
+    def copy_file(
+        self,
+        src_bucket: str,
+        src_key: str,
+        dest_bucket: str,
+        dest_key: Optional[str] = None,
+    ) -> None:
+        """Copy an object within or across buckets."""
+        dest_key = dest_key or src_key
+        try:
+            self.client.copy(
+                {"Bucket": src_bucket, "Key": src_key}, dest_bucket, dest_key
+            )
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to copy {src_key}: {e}") from e
 
-    datetimes = [start + pd.Timedelta(seconds=offset) for offset in random_offsets]
+    def move_file(
+        self,
+        src_bucket: str,
+        src_key: str,
+        dest_bucket: str,
+        dest_key: Optional[str] = None,
+    ) -> None:
+        """Move an object (copy then delete the source)."""
+        self.copy_file(src_bucket, src_key, dest_bucket, dest_key)
+        self.delete_file(src_bucket, src_key)
 
-    df = pd.DataFrame({
-        "id": ids,
-        "datetime": datetimes
-    })
+    def generate_presigned_url(
+        self,
+        bucket_name: str,
+        key: str,
+        expires_in: int = 3600,
+        method: str = "get_object",
+    ) -> str:
+        """Create a temporary URL. method: 'get_object' or 'put_object'."""
+        try:
+            return self.client.generate_presigned_url(
+                ClientMethod=method,
+                Params={"Bucket": bucket_name, "Key": key},
+                ExpiresIn=expires_in,
+            )
+        except ClientError as e:
+            raise S3ManagerError(f"Failed to presign {key}: {e}") from e
 
-    # Shuffle row order so repeated ids aren't artificially grouped together
-    df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
 
-    df["datetime"] = pd.to_datetime(df["datetime"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    s3 = S3Manager(region_name="us-east-1")
 
-    return df
+    bucket = "my-example-bucket-12345"
+    if not s3.bucket_exists(bucket):
+        s3.create_bucket(bucket)
 
-
-# --- Example usage: bursty data with ~20% of polygons having multiple records ---
-df_bursty = generate_test_data(
-    n_polygons=200,
-    start_date="2024-01-01 00:00:00",
-    end_date="2024-02-01 00:00:00",
-    mode="bursty",
-    n_bursts=6,
-    burst_width_minutes=15,
-    repeat_fraction=0.2,
-    max_repeats=4
-)
-
-print(df_bursty.head(10))
-print(df_bursty.shape)
-print("Unique polygons:", df_bursty['id'].nunique())
-print("Total records:", len(df_bursty))
-print(df_bursty['id'].value_counts().head(10))
-===== FILE: time_binning.py =====
-import pandas as pd
-import numpy as np
-
-# --- assume df has a column 'datetime' as datetime objects (or strings in that format) ---
-df['datetime'] = pd.to_datetime(df['datetime'], format="%Y-%m-%d %H:%M:%S")
-
-# 1. Bin into 10-minute intervals
-df['bin_10min'] = df['datetime'].dt.floor('10min')
-
-# 2. Get the unique 10-min bins, sorted in time order
-unique_bins = pd.Series(sorted(df['bin_10min'].unique()))
-
-# 3. Cluster the unique bins into 6 groups based on temporal proximity.
-#    Using pd.qcut on the bin's numeric (epoch) representation groups
-#    bins so that ones close together in time end up in the same group,
-#    while keeping group sizes balanced.
-bin_epoch = unique_bins.astype('int64')  # nanoseconds since epoch
-group_labels = pd.qcut(bin_epoch, q=6, labels=False, duplicates='drop')
-
-bin_to_group = dict(zip(unique_bins, group_labels))
-
-# 4. Map back to the original dataframe
-df['time_group'] = df['bin_10min'].map(bin_to_group)
-
-print(df[['datetime', 'bin_10min', 'time_group']].head(20))
-print(df['time_group'].value_counts().sort_index())
-===== FILE: time_binning_kmeans.py =====
-import pandas as pd
-import numpy as np
-from sklearn.cluster import KMeans
-from create_test_data import generate_test_data
-
-df = generate_test_data(
-    n_polygons=200,
-    start_date="2024-01-01 00:00:00",
-    end_date="2024-02-01 00:00:00",
-    mode="bursty",
-    n_bursts=6,
-    burst_width_minutes=15,
-    repeat_fraction=0.2,
-    max_repeats=4
-)
-
-# --- assume df has a column 'datetime' as datetime objects (or strings in that format) ---
-df['datetime'] = pd.to_datetime(df['datetime'], format="%Y-%m-%d %H:%M:%S")
-
-# 1. Bin into 10-minute intervals
-df['bin_10min'] = df['datetime'].dt.floor('10min')
-
-# 2. Get unique 10-min bins, sorted in time order
-unique_bins = pd.Series(sorted(df['bin_10min'].unique()))
-bin_epoch = unique_bins.astype('int64').to_numpy().reshape(-1, 1)  # nanoseconds since epoch
-
-# 3. KMeans cluster the unique bins into 6 groups based on time proximity
-kmeans = KMeans(n_clusters=6, random_state=42, n_init=10)
-raw_labels = kmeans.fit_predict(bin_epoch)
-
-# 4. Relabel clusters 0-5 in chronological order (KMeans labels are arbitrary)
-cluster_order = (
-    pd.DataFrame({'bin': unique_bins, 'raw_label': raw_labels})
-    .groupby('raw_label')['bin']
-    .mean()
-    .sort_values()
-    .index
-)
-label_map = {old: new for new, old in enumerate(cluster_order)}
-chrono_labels = [label_map[l] for l in raw_labels]
-
-bin_to_group = dict(zip(unique_bins, chrono_labels))
-
-# 5. Map back to the original dataframe
-df['time_group'] = df['bin_10min'].map(bin_to_group)
-
-print(df[['datetime', 'bin_10min', 'time_group']].head(20))
-print(df['time_group'].value_counts().sort_index())
-
-# Optional: see the time range covered by each group
-group_ranges = df.groupby('time_group')['datetime'].agg(['min', 'max', 'count'])
-print(group_ranges)
+    s3.upload_file("example.txt", bucket, "docs/example.txt")
+    print(s3.list_files(bucket, prefix="docs/"))
+    print(s3.get_object_text(bucket, "docs/example.txt"))
+    print(s3.generate_presigned_url(bucket, "docs/example.txt", expires_in=600))
+    s3.delete_file(bucket, "docs/example.txt")
