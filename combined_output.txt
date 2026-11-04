@@ -1,3 +1,113 @@
+===== FILE: history.py =====
+import marimo
+
+__generated_with = "0.9.0"
+app = marimo.App(width="medium")
+
+
+@app.cell
+def _():
+    import marimo as mo
+    from datetime import datetime
+    return datetime, mo
+
+
+@app.cell
+def _(mo):
+    # Shared state: the list of processing steps (each step is a dict)
+    get_history, set_history = mo.state([])
+    return get_history, set_history
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        """
+        # Processing History Tracker
+        Log each processing step you apply, review the history, and undo or clear it.
+        """
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    step_name = mo.ui.dropdown(
+        options=["Load data", "Clean", "Filter", "Transform", "Normalize", "Aggregate", "Export", "Other"],
+        value="Clean",
+        label="Step type",
+    )
+    description = mo.ui.text(label="Description", placeholder="e.g. dropped rows with nulls", full_width=True)
+    status = mo.ui.radio(options=["success", "warning", "failed"], value="success", label="Status", inline=True)
+    add_button = mo.ui.run_button(label="Add step")
+    undo_button = mo.ui.run_button(label="Undo last", kind="warn")
+    clear_button = mo.ui.run_button(label="Clear all", kind="danger")
+
+    mo.vstack(
+        [
+            mo.hstack([step_name, status], justify="start", gap=2),
+            description,
+            mo.hstack([add_button, undo_button, clear_button], justify="start"),
+        ]
+    )
+    return add_button, clear_button, description, status, step_name, undo_button
+
+
+@app.cell
+def _(
+    add_button,
+    clear_button,
+    datetime,
+    description,
+    set_history,
+    status,
+    step_name,
+    undo_button,
+):
+    # Handle button clicks (each run_button is True only on the run triggered by its click)
+    if add_button.value:
+        set_history(
+            lambda h: h
+            + [
+                {
+                    "#": len(h) + 1,
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "step": step_name.value,
+                    "description": description.value,
+                    "status": status.value,
+                }
+            ]
+        )
+    elif undo_button.value:
+        set_history(lambda h: h[:-1])
+    elif clear_button.value:
+        set_history([])
+    return
+
+
+@app.cell
+def _(get_history, mo):
+    history = get_history()
+    if history:
+        failed = sum(1 for s in history if s["status"] == "failed")
+        warned = sum(1 for s in history if s["status"] == "warning")
+        summary = mo.hstack(
+            [
+                mo.stat(value=len(history), label="Total steps"),
+                mo.stat(value=warned, label="Warnings"),
+                mo.stat(value=failed, label="Failed"),
+            ],
+            justify="start",
+        )
+        out = mo.vstack([summary, mo.ui.table(history, selection=None, pagination=False)])
+    else:
+        out = mo.callout(mo.md("No steps recorded yet. Add one above."), kind="neutral")
+    out
+    return
+
+
+if __name__ == "__main__":
+    app.run()
 ===== FILE: s3_manager.py =====
 """S3 bucket and object management helper built on boto3."""
 
