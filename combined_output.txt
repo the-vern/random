@@ -1,7 +1,7 @@
 ===== FILE: demo_forms.py =====
 import marimo
 
-__generated_with = "0.14.0"
+__generated_with = "0.25.2"
 app = marimo.App(width="medium")
 
 
@@ -10,133 +10,404 @@ def _():
     import marimo as mo
     from marimo_forms import THEMES, create_form, field, form_values, group, show_if
 
-    return THEMES, create_form, field, form_values, group, mo, show_if
+    def show(value):
+        """Tiny helper: display a form's value (or a hint if not submitted yet)."""
+        return mo.json(value if value is not None else {"status": "not submitted yet"})
+
+    return THEMES, create_form, field, form_values, group, mo, show, show_if
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    # `create_form` showcase
+
+    "
+        "Ten ways to use `marimo_forms`. Each example is a self-contained cell; the "
+        "cell right below it shows the form's value.
+    """)
+    return
+
+
+@app.cell
+def _(create_form, mo):
+    f_basic = create_form(
+        {
+            "name": mo.ui.text(label="Name", full_width=True),
+            "email": mo.ui.text(label="Email", full_width=True),
+            "role": mo.ui.dropdown(["Engineer", "Designer", "Manager"], label="Role"),
+            "subscribe": mo.ui.checkbox(label="Subscribe to updates"),
+        },
+        title="1. Basic form",
+        description="A dict of components in, a styled form with a submit button out.",
+        submit_label="Send",
+    )
+    f_basic
+    return (f_basic,)
+
+
+@app.cell
+def _(f_basic, show):
+    show(f_basic.value)
+    return
+
+
+@app.cell
+def _(create_form, mo):
+    f_live = create_form(
+        {
+            "volume": mo.ui.slider(0, 100, value=40, label="Volume", full_width=True),
+            "bass": mo.ui.slider(0, 100, value=60, label="Bass", full_width=True),
+            "mute": mo.ui.switch(label="Mute"),
+            "device": mo.ui.dropdown(["Speakers", "Headphones"], value="Speakers", label="Output"),
+        },
+        title="2. Live form",
+        description="submit=False: the value updates as you change inputs. bordered=False: no card.",
+        columns=2,
+        submit=False,
+        bordered=False,
+    )
+    f_live
+    return (f_live,)
+
+
+@app.cell
+def _(f_live, show):
+    show(f_live.value)
+    return
 
 
 @app.cell
 def _(create_form, field, group, mo):
-    form = create_form(
+    f_groups = create_form(
         {
-            "name": mo.ui.text(label="Full name", full_width=True),
-            "email": mo.ui.text(label="Email", full_width=True),
-            "bio": field(
-                mo.ui.text_area(label="Bio", full_width=True),
-                span=2,
-                hint="A sentence or two is plenty.",
-            ),
-            "prefs": group(
-                "Preferences",
+            # full-width header field: spans all 3 columns
+            "headline": field(mo.ui.text(label="Headline", full_width=True), span=3),
+            # a group occupying 2 of the 3 columns...
+            "personal": group(
+                "Personal",
                 {
-                    "theme": mo.ui.dropdown(["light", "dark", "auto"], value="auto", label="Theme"),
-                    "alerts": mo.ui.switch(label="Alerts"),
-                    # nested group, placed in the 2nd column
-                    "advanced": group(
-                        "Advanced",
+                    "first": mo.ui.text(label="First name", full_width=True),
+                    "last": mo.ui.text(label="Last name", full_width=True),
+                    # ...with a nested group that spans both of its columns
+                    "contact": group(
+                        "Contact",
                         {
-                            "retries": mo.ui.slider(0, 10, value=3, label="Retries", full_width=True),
-                            "debug": mo.ui.checkbox(label="Debug mode"),
+                            "email": mo.ui.text(label="Email", full_width=True),
+                            "phone": mo.ui.text(label="Phone", full_width=True),
                         },
-                        collapsible=True,
-                        collapsed=True,
+                        columns=2,
                         span=2,
                     ),
                 },
                 columns=2,
                 span=2,
-                description="How the app should behave for you.",
+            ),
+            # ...and one in the remaining column
+            "settings": group(
+                "Settings",
+                {
+                    "theme": mo.ui.dropdown(["light", "dark"], value="light", label="Theme"),
+                    "alerts": mo.ui.switch(label="Alerts"),
+                },
+            ),
+            # explicit placement: start at column 2 of the next row
+            "notes": field(
+                mo.ui.text_area(label="Notes", full_width=True),
+                col=2,
+                span=2,
+                hint="Placed with col=2, span=2.",
             ),
         },
-        title="Create profile",
-        description="Fields are placed on a 2-column grid.",
-        columns=2,
-        theme="default",
-        style={"max_width": "720px"},
+        title="3. Groups, nesting and placement",
+        columns=3,
     )
-    form
-    return (form,)
+    f_groups
+    return (f_groups,)
 
 
 @app.cell
-def _(form, form_values, mo):
-    mo.vstack([mo.md("**Nested value**"), mo.json(form_values(form) or {})])
+def _(f_groups, form_values, mo):
+    mo.hstack(
+        [
+            mo.vstack([mo.md("**Nested** (`form_values`)"), mo.json(form_values(f_groups) or {})]),
+            mo.vstack(
+                [mo.md("**Flat** (`nested=False`)"), mo.json(form_values(f_groups, nested=False) or {})]
+            ),
+        ],
+        justify="start",
+        gap=2,
+    )
+    return
+
+
+@app.cell
+def _(create_form, group, mo):
+    f_layouts = create_form(
+        {
+            "toggles": group(
+                "Row layout",
+                {
+                    "a": mo.ui.checkbox(label="Email"),
+                    "b": mo.ui.checkbox(label="SMS"),
+                    "c": mo.ui.checkbox(label="Push"),
+                },
+                layout="row",
+                description="Items sit side by side and wrap.",
+            ),
+            "stacked": group(
+                "Stack layout",
+                {
+                    "d": mo.ui.radio(["Daily", "Weekly", "Monthly"], value="Weekly", label="Digest"),
+                },
+                layout="stack",
+            ),
+            "more": group(
+                "Collapsible (starts closed)",
+                {"e": mo.ui.text(label="Webhook URL", full_width=True)},
+                collapsible=True,
+                collapsed=True,
+            ),
+            "plain": group(
+                None,  # no title
+                {"f": mo.ui.checkbox(label="Borderless, untitled group")},
+                bordered=False,
+            ),
+        },
+        title="4. Group layouts",
+        submit=False,
+    )
+    f_layouts
     return
 
 
 @app.cell
 def _(THEMES, create_form, group, mo):
-    # Same components, different look: preset + overrides + per-group tweaks.
-    my_theme = THEMES["soft"].with_(accent_color="#059669", group_background="rgba(5,150,105,0.06)")
-
-    styled = create_form(
-        {
-            "a": mo.ui.number(0, 100, value=5, label="A"),
-            "b": mo.ui.number(0, 100, value=7, label="B"),
-            "left": group("Left", {"c": mo.ui.text(label="C")}, span=1),
-            "right": group(
-                "Right",
-                {"d": mo.ui.text(label="D")},
-                theme={"group_background": "rgba(220,38,38,0.07)"},  # inherited by nested children
-                title_style={"color": "#dc2626"},
+    def sample_items():
+        # A factory returns FRESH components each call: a component instance can
+        # only belong to one form, so reusable layouts should build their own.
+        return {
+            "name": mo.ui.text(label="Name", full_width=True),
+            "plan": mo.ui.dropdown(["Free", "Pro"], value="Free", label="Plan"),
+            "opts": group(
+                "Options",
+                {"x": mo.ui.switch(label="Option X"), "y": mo.ui.switch(label="Option Y")},
+                columns=2,
             ),
-        },
-        title="Styled form",
-        columns=2,
-        theme=my_theme,
-        submit=False,
-        style={"max_width": "560px", "margin": "0 auto"},
+        }
+
+    f_themes = mo.ui.tabs(
+        {
+            name: create_form(
+                sample_items(), title=f"Theme: {name}", description="Same form, new look.", theme=name
+            )
+            for name in THEMES
+        }
     )
-    styled
-    return (styled,)
+    f_themes
+    return
 
 
 @app.cell
-def _(styled):
-    styled.value
+def _(THEMES, create_form, field, group, mo):
+    brand = THEMES["default"].with_(
+        font_family="Georgia, serif",
+        accent_color="#059669",
+        radius="6px",
+        group_radius="4px",
+        shadow="0 4px 14px rgba(5,150,105,0.18)",
+        border_color="#059669",
+        group_background="rgba(5,150,105,0.06)",
+        group_border_color="rgba(5,150,105,0.30)",
+        title_align="center",
+        divider_under_title=True,
+    )
+
+    f_custom = create_form(
+        {
+            "profile": group(
+                "Labels on the left",
+                {
+                    # field(label=...) draws our own label; the theme decides where
+                    "full_name": field(
+                        mo.ui.text(full_width=True), label="Full name", hint="As on your ID"
+                    ),
+                    "city": field(mo.ui.text(full_width=True), label="City"),
+                },
+                theme={"label_position": "left", "gap": "8px"},  # override just this group
+            ),
+            "danger": group(
+                "Raw CSS on one group",
+                {"confirm": mo.ui.checkbox(label="I understand")},
+                title_style={"color": "#dc2626"},
+                style={"border_left": "4px solid #dc2626"},  # css keys: underscores -> hyphens
+            ),
+        },
+        title="6. Custom styling",
+        description="Theme.with_(...) + per-group theme dict + raw CSS.",
+        theme=brand,
+        style={"max_width": "560px", "margin": "0 auto"},
+        title_style={"letter_spacing": "0.04em"},
+    )
+    f_custom
     return
 
 
 @app.cell
 def _(mo):
-    # Controllers live in their OWN cell so the form cell can re-run when they change.
     has_company = mo.ui.checkbox(label="I'm signing up for a company")
     plan = mo.ui.dropdown(["Free", "Pro", "Team"], value="Free", label="Plan")
-    return has_company, plan
+    source = mo.ui.dropdown(
+        ["Search", "Friend", "Other"], value="Search", label="How did you hear about us?"
+    )
+    return has_company, plan, source
 
 
 @app.cell
-def _(create_form, field, group, has_company, mo, plan, show_if):
-    # Naming has_company / plan here makes marimo rebuild this form when they change.
-    cond_form = create_form(
+def _(create_form, field, group, has_company, mo, plan, show_if, source):
+    # Naming the controllers here makes marimo rebuild this form when they change.
+    f_cond = create_form(
         {
-            "has_company": field(has_company, live=True),       # shown inside the form
+            "has_company": field(has_company, live=True),  # live=True: shown, but outside the form
             "plan": field(plan, live=True),
+            "source": field(source, live=True),
             "name": mo.ui.text(label="Your name", full_width=True),
+            # truthy check
             "company": field(
                 mo.ui.text(label="Company name", full_width=True),
-                visible_when=show_if(has_company),               # checkbox reveals this
+                visible_when=show_if(has_company),
             ),
-            "billing": group(
+            # equals rule
+            "source_other": field(
+                mo.ui.text(label="Please specify", full_width=True),
+                visible_when=show_if(source, equals="Other"),
+            ),
+            # combine show_if rules and a plain lambda; works on groups too
+            "team": group(
                 "Team billing",
                 {
                     "seats": mo.ui.number(2, 500, value=5, label="Seats"),
                     "invoice_email": mo.ui.text(label="Invoice email", full_width=True),
                 },
                 columns=2,
-                visible_when=show_if(plan, equals="Team") & show_if(has_company),
+                visible_when=show_if(plan, equals="Team") & (lambda: has_company.value),
+            ),
+            # inverted rule
+            "solo_note": field(
+                mo.ui.text(label="Anything we should know?", full_width=True),
+                visible_when=~show_if(has_company),
             ),
         },
-        title="Conditional fields",
-        description="Tick the box and pick 'Team' to reveal more.",
-        columns=1,
-        style={"max_width": "520px"},
+        title="7. Conditional fields",
+        description="Tick the box, pick 'Team', or choose 'Other' to reveal more.",
+        style={"max_width": "560px"},
     )
-    cond_form
-    return (cond_form,)
+    f_cond
+    return (f_cond,)
 
 
 @app.cell
-def _(cond_form, form_values):
-    form_values(cond_form)
+def _(f_cond, form_values, show):
+    # hidden fields show up as None so the shape never changes
+    show(form_values(f_cond))
+    return
+
+
+@app.cell
+def _(create_form, mo):
+    f_valid = create_form(
+        {
+            "username": mo.ui.text(label="Username", full_width=True),
+            "pw": mo.ui.text(label="Password", kind="password", full_width=True),
+            "pw2": mo.ui.text(label="Repeat password", kind="password", full_width=True),
+        },
+        title="8. Submit options + validation",
+        submit_label="Create account",
+        submit_tooltip="Checks that both passwords match",
+        show_clear_button=True,
+        clear_on_submit=False,
+        validate=lambda v: (
+            "Passwords do not match" if v["pw"] != v["pw2"] else None
+        ),
+        style={"max_width": "420px"},
+    )
+    f_valid
+    return (f_valid,)
+
+
+@app.cell
+def _(f_valid, show):
+    show(f_valid.value)
+    return
+
+
+@app.cell
+def _(group, mo):
+    def address_group(prefix, title, **group_kwargs):
+        """Reusable section. Field names must be unique in a form, so prefix them."""
+        return group(
+            title,
+            {
+                f"{prefix}_street": mo.ui.text(label="Street", full_width=True),
+                f"{prefix}_city": mo.ui.text(label="City", full_width=True),
+                f"{prefix}_zip": mo.ui.text(label="ZIP", full_width=True),
+            },
+            columns=3,
+            **group_kwargs,
+        )
+
+    ship_differs = mo.ui.checkbox(label="Ship to a different address")
+    return address_group, ship_differs
+
+
+@app.cell
+def _(address_group, create_form, field, ship_differs):
+    f_reuse = create_form(
+        {
+            "billing": address_group("bill", "Billing address"),
+            "ship_differs": field(ship_differs, live=True),
+            "shipping": address_group(
+                "ship", "Shipping address", visible_when=lambda: ship_differs.value
+            ),
+        },
+        title="9. Reusable address block",
+        description="The same address_group() used twice; the second is conditional.",
+        theme="compact",
+        style={"max_width": "640px"},
+    )
+    f_reuse
+    return (f_reuse,)
+
+
+@app.cell
+def _(f_reuse, form_values, show):
+    show(form_values(f_reuse))
+    return
+
+
+@app.cell
+def _(create_form, mo):
+    f_react = create_form(
+        {
+            "n": mo.ui.slider(1, 12, value=4, label="Rows", full_width=True),
+            "word": mo.ui.text(value="marimo", label="Word", full_width=True),
+        },
+        title="10. Downstream reactivity",
+        description="Submit to update the cell below; it re-runs automatically.",
+        submit_label="Apply",
+    )
+    f_react
+    return (f_react,)
+
+
+@app.cell
+def _(f_react, mo):
+    _v = f_react.value
+    mo.md(
+        "_Submit the form above._"
+        if _v is None
+        else "\n".join(f"- {_v['word']} #{i + 1}" for i in range(_v["n"]))
+    )
     return
 
 
@@ -384,6 +655,9 @@ class Condition:
 
     def __or__(self, other: Any) -> "Condition":
         return Condition(lambda: self() or _is_visible(other))
+
+    __rand__ = __and__  # lets ``(lambda: ...) & show_if(...)`` work too
+    __ror__ = __or__
 
     def __invert__(self) -> "Condition":
         return Condition(lambda: not self())
