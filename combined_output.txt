@@ -1,412 +1,872 @@
-===== FILE: history.py =====
+===== FILE: demo_forms.py =====
 import marimo
 
-__generated_with = "0.9.0"
+__generated_with = "0.14.0"
 app = marimo.App(width="medium")
 
 
 @app.cell
 def _():
     import marimo as mo
-    from datetime import datetime
-    return datetime, mo
+    from marimo_forms import THEMES, create_form, field, form_values, group, show_if
+
+    return THEMES, create_form, field, form_values, group, mo, show_if
 
 
 @app.cell
-def _(mo):
-    # Shared state: the list of processing steps (each step is a dict)
-    get_history, set_history = mo.state([])
-    return get_history, set_history
-
-
-@app.cell
-def _(mo):
-    mo.md(
-        """
-        # Processing History Tracker
-        Log each processing step you apply, review the history, and undo or clear it.
-        """
-    )
-    return
-
-
-@app.cell
-def _(mo):
-    step_name = mo.ui.dropdown(
-        options=["Load data", "Clean", "Filter", "Transform", "Normalize", "Aggregate", "Export", "Other"],
-        value="Clean",
-        label="Step type",
-    )
-    description = mo.ui.text(label="Description", placeholder="e.g. dropped rows with nulls", full_width=True)
-    status = mo.ui.radio(options=["success", "warning", "failed"], value="success", label="Status", inline=True)
-    add_button = mo.ui.run_button(label="Add step")
-    undo_button = mo.ui.run_button(label="Undo last", kind="warn")
-    clear_button = mo.ui.run_button(label="Clear all", kind="danger")
-
-    mo.vstack(
-        [
-            mo.hstack([step_name, status], justify="start", gap=2),
-            description,
-            mo.hstack([add_button, undo_button, clear_button], justify="start"),
-        ]
-    )
-    return add_button, clear_button, description, status, step_name, undo_button
-
-
-@app.cell
-def _(
-    add_button,
-    clear_button,
-    datetime,
-    description,
-    set_history,
-    status,
-    step_name,
-    undo_button,
-):
-    # Handle button clicks (each run_button is True only on the run triggered by its click)
-    if add_button.value:
-        set_history(
-            lambda h: h
-            + [
+def _(create_form, field, group, mo):
+    form = create_form(
+        {
+            "name": mo.ui.text(label="Full name", full_width=True),
+            "email": mo.ui.text(label="Email", full_width=True),
+            "bio": field(
+                mo.ui.text_area(label="Bio", full_width=True),
+                span=2,
+                hint="A sentence or two is plenty.",
+            ),
+            "prefs": group(
+                "Preferences",
                 {
-                    "#": len(h) + 1,
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "step": step_name.value,
-                    "description": description.value,
-                    "status": status.value,
-                }
-            ]
-        )
-    elif undo_button.value:
-        set_history(lambda h: h[:-1])
-    elif clear_button.value:
-        set_history([])
+                    "theme": mo.ui.dropdown(["light", "dark", "auto"], value="auto", label="Theme"),
+                    "alerts": mo.ui.switch(label="Alerts"),
+                    # nested group, placed in the 2nd column
+                    "advanced": group(
+                        "Advanced",
+                        {
+                            "retries": mo.ui.slider(0, 10, value=3, label="Retries", full_width=True),
+                            "debug": mo.ui.checkbox(label="Debug mode"),
+                        },
+                        collapsible=True,
+                        collapsed=True,
+                        span=2,
+                    ),
+                },
+                columns=2,
+                span=2,
+                description="How the app should behave for you.",
+            ),
+        },
+        title="Create profile",
+        description="Fields are placed on a 2-column grid.",
+        columns=2,
+        theme="default",
+        style={"max_width": "720px"},
+    )
+    form
+    return (form,)
+
+
+@app.cell
+def _(form, form_values, mo):
+    mo.vstack([mo.md("**Nested value**"), mo.json(form_values(form) or {})])
     return
 
 
 @app.cell
-def _(get_history, mo):
-    history = get_history()
-    if history:
-        failed = sum(1 for s in history if s["status"] == "failed")
-        warned = sum(1 for s in history if s["status"] == "warning")
-        summary = mo.hstack(
-            [
-                mo.stat(value=len(history), label="Total steps"),
-                mo.stat(value=warned, label="Warnings"),
-                mo.stat(value=failed, label="Failed"),
-            ],
-            justify="start",
-        )
-        out = mo.vstack([summary, mo.ui.table(history, selection=None, pagination=False)])
-    else:
-        out = mo.callout(mo.md("No steps recorded yet. Add one above."), kind="neutral")
-    out
+def _(THEMES, create_form, group, mo):
+    # Same components, different look: preset + overrides + per-group tweaks.
+    my_theme = THEMES["soft"].with_(accent_color="#059669", group_background="rgba(5,150,105,0.06)")
+
+    styled = create_form(
+        {
+            "a": mo.ui.number(0, 100, value=5, label="A"),
+            "b": mo.ui.number(0, 100, value=7, label="B"),
+            "left": group("Left", {"c": mo.ui.text(label="C")}, span=1),
+            "right": group(
+                "Right",
+                {"d": mo.ui.text(label="D")},
+                theme={"group_background": "rgba(220,38,38,0.07)"},  # inherited by nested children
+                title_style={"color": "#dc2626"},
+            ),
+        },
+        title="Styled form",
+        columns=2,
+        theme=my_theme,
+        submit=False,
+        style={"max_width": "560px", "margin": "0 auto"},
+    )
+    styled
+    return (styled,)
+
+
+@app.cell
+def _(styled):
+    styled.value
+    return
+
+
+@app.cell
+def _(mo):
+    # Controllers live in their OWN cell so the form cell can re-run when they change.
+    has_company = mo.ui.checkbox(label="I'm signing up for a company")
+    plan = mo.ui.dropdown(["Free", "Pro", "Team"], value="Free", label="Plan")
+    return has_company, plan
+
+
+@app.cell
+def _(create_form, field, group, has_company, mo, plan, show_if):
+    # Naming has_company / plan here makes marimo rebuild this form when they change.
+    cond_form = create_form(
+        {
+            "has_company": field(has_company, live=True),       # shown inside the form
+            "plan": field(plan, live=True),
+            "name": mo.ui.text(label="Your name", full_width=True),
+            "company": field(
+                mo.ui.text(label="Company name", full_width=True),
+                visible_when=show_if(has_company),               # checkbox reveals this
+            ),
+            "billing": group(
+                "Team billing",
+                {
+                    "seats": mo.ui.number(2, 500, value=5, label="Seats"),
+                    "invoice_email": mo.ui.text(label="Invoice email", full_width=True),
+                },
+                columns=2,
+                visible_when=show_if(plan, equals="Team") & show_if(has_company),
+            ),
+        },
+        title="Conditional fields",
+        description="Tick the box and pick 'Team' to reveal more.",
+        columns=1,
+        style={"max_width": "520px"},
+    )
+    cond_form
+    return (cond_form,)
+
+
+@app.cell
+def _(cond_form, form_values):
+    form_values(cond_form)
     return
 
 
 if __name__ == "__main__":
     app.run()
-===== FILE: s3_manager.py =====
-"""S3 bucket and object management helper built on boto3."""
+===== FILE: marimo_forms.py =====
+"""
+marimo_forms
+============
 
-import logging
-import os
-from typing import Dict, Iterator, List, Optional
+Turn a handful of marimo input components into a nicely laid out, themeable,
+reusable form -- with nested groups and control over where things are placed.
 
-import boto3
-from botocore.exceptions import ClientError
+Quick start
+-----------
+    import marimo as mo
+    from marimo_forms import create_form, group, field, form_values
 
-logger = logging.getLogger(__name__)
+    form = create_form(
+        {
+            "name":  mo.ui.text(label="Name"),
+            "email": mo.ui.text(label="Email"),
+            "prefs": group(
+                "Preferences",
+                {
+                    "theme":  mo.ui.dropdown(["light", "dark"], value="light", label="Theme"),
+                    "alerts": mo.ui.switch(label="Alerts"),
+                },
+                columns=2,
+            ),
+        },
+        title="Sign up",
+        columns=2,
+    )
+    form          # display it (last expression of a cell)
+
+    # in another cell:
+    form.value                 # flat dict (None until submitted)
+    form_values(form)          # nested dict mirroring the groups
+
+Concepts
+--------
+* create_form(items, ...)   -> a marimo UI element (use ``.value`` as usual)
+* group(title, items, ...)  -> a (possibly nested) section of the form
+* field(component, ...)     -> optional wrapper adding placement / label / hint / style
+* Theme                     -> base look; presets in THEMES; override per form,
+                               per group (``theme={...}``) or per field (``style={...}``)
+
+Conditional visibility
+----------------------
+Show a field/group only when another input satisfies a rule:
+
+    # cell 1 -- controllers live OUTSIDE the form
+    has_company = mo.ui.checkbox(label="I work for a company")
+    plan = mo.ui.dropdown(["Free", "Pro", "Team"], value="Free", label="Plan")
+
+    # cell 2 -- name the controllers here so marimo re-runs this cell on change
+    form = create_form({
+        "has_company": field(has_company, live=True),          # shown in the form
+        "company": field(mo.ui.text(label="Company"),
+                         visible_when=show_if(has_company)),
+        "seats": field(mo.ui.number(1, 500, label="Seats"),
+                       visible_when=show_if(plan, equals="Team") & show_if(has_company)),
+    })
+
+``show_if(ctrl, equals=/not_equals=/one_of=/contains=/test=)`` returns a
+Condition; combine with ``&``, ``|``, ``~``. ``visible_when`` also accepts a
+bool or a zero-arg callable, on ``field(...)`` and ``group(...)``.
+Because the form is rebuilt when a controller changes, values typed into the
+other fields may reset at that moment; hidden fields are left out of ``.value``.
+
+Placement
+---------
+Every group lays out its children on a CSS grid with ``columns`` columns.
+Any child (field or group) can set:
+    span=N   -> occupy N columns
+    col=N    -> start at column N (1-based)
+    row=N    -> start at row N (1-based)
+Group ``layout`` can also be "row" (side by side, wraps) or "stack" (vertical).
+
+Notes
+-----
+* Field names must be unique across the whole form (they are the keys of the
+  flat ``.value``) and must be valid Python identifiers.
+* Everything is styled with inline CSS, so it works in any marimo theme and
+  needs no stylesheet.
+"""
+
+from __future__ import annotations
+
+import html as _html
+from dataclasses import dataclass, field as _dc_field, fields as _dc_fields, replace
+from typing import Any, Callable, Mapping
+
+import marimo as mo
+
+__all__ = [
+    "Theme",
+    "THEMES",
+    "create_form",
+    "group",
+    "field",
+    "form_values",
+    "Group",
+    "Field",
+    "Condition",
+    "show_if",
+]
 
 
-class S3ManagerError(Exception):
-    """Raised when an S3 operation fails."""
+# --------------------------------------------------------------------------- #
+# Theme
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Theme:
+    """Base look of a form. Every attribute can be overridden per form/group."""
+
+    # typography
+    font_family: str = "inherit"
+    text_color: str = "inherit"
+    muted_color: str = "#6b7280"
+    title_size: str = "1.35rem"
+    title_weight: str = "650"
+    description_size: str = "0.9rem"
+    group_title_size: str = "1rem"
+    group_title_weight: str = "600"
+    label_size: str = "0.85rem"
+    hint_size: str = "0.78rem"
+
+    # surface
+    background: str = "transparent"
+    border_color: str = "rgba(128,128,128,0.30)"
+    border_width: str = "1px"
+    border_style: str = "solid"
+    radius: str = "12px"
+    shadow: str = "0 1px 3px rgba(0,0,0,0.08)"
+    padding: str = "20px"
+    max_width: str = "100%"
+
+    # groups (nested sections)
+    group_background: str = "rgba(128,128,128,0.05)"
+    group_border_color: str = "rgba(128,128,128,0.22)"
+    group_border_width: str = "1px"
+    group_radius: str = "10px"
+    group_padding: str = "14px"
+    accent_color: str = "#4f46e5"
+
+    # spacing
+    gap: str = "14px"            # between children inside a group
+    section_gap: str = "18px"    # between header and body
+
+    # text placement
+    title_align: str = "left"            # left | center | right
+    group_title_align: str = "left"
+    label_position: str = "top"          # top | left   (only for field(label=...))
+    label_width: str = "140px"           # when label_position == "left"
+    hint_position: str = "below"         # below | above
+    divider_under_title: bool = False
+
+    def with_(self, **overrides: Any) -> "Theme":
+        """Return a copy with some attributes changed (validated)."""
+        valid = {f.name for f in _dc_fields(self)}
+        bad = set(overrides) - valid
+        if bad:
+            raise TypeError(
+                f"Unknown theme option(s): {sorted(bad)}. Valid: {sorted(valid)}"
+            )
+        return replace(self, **overrides)
 
 
-class S3Manager:
-    """Wrapper around boto3 for common S3 bucket and object operations.
+THEMES: dict[str, Theme] = {
+    # Neutral bordered card.
+    "default": Theme(),
+    # No card chrome; groups are plain with a light divider feel.
+    "minimal": Theme(
+        border_width="0px",
+        shadow="none",
+        padding="0px",
+        group_background="transparent",
+        group_border_color="rgba(128,128,128,0.25)",
+        group_radius="0px",
+        group_padding="12px 0 0 0",
+        divider_under_title=True,
+    ),
+    # Tighter spacing for dense dashboards.
+    "compact": Theme(
+        title_size="1.1rem",
+        padding="12px",
+        group_padding="10px",
+        gap="8px",
+        section_gap="10px",
+        radius="8px",
+        group_radius="6px",
+    ),
+    # Roomier, centered header, elevated card.
+    "soft": Theme(
+        radius="18px",
+        group_radius="14px",
+        padding="28px",
+        group_padding="18px",
+        gap="18px",
+        section_gap="22px",
+        shadow="0 8px 24px rgba(0,0,0,0.10)",
+        border_width="0px",
+        group_background="rgba(79,70,229,0.05)",
+        group_border_color="rgba(79,70,229,0.18)",
+        title_align="center",
+    ),
+}
 
-    Credentials are resolved via the standard boto3 chain (env vars,
-    shared credentials file, IAM role) unless passed explicitly.
+
+def _resolve_theme(theme: "Theme | str | Mapping[str, Any] | None", base: Theme) -> Theme:
+    """Accepts a Theme, a preset name, or a dict of overrides applied to ``base``."""
+    if theme is None:
+        return base
+    if isinstance(theme, Theme):
+        return theme
+    if isinstance(theme, str):
+        if theme not in THEMES:
+            raise ValueError(f"Unknown theme '{theme}'. Presets: {sorted(THEMES)}")
+        return THEMES[theme]
+    return base.with_(**dict(theme))
+
+
+# --------------------------------------------------------------------------- #
+# Building blocks
+# --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Conditional visibility
+# --------------------------------------------------------------------------- #
+_MISSING = object()
+
+
+class Condition:
+    """A visibility rule. Combine with ``&`` (and), ``|`` (or) and ``~`` (not)."""
+
+    def __init__(self, fn: Callable[[], bool]) -> None:
+        self._fn = fn
+
+    def __call__(self) -> bool:
+        return bool(self._fn())
+
+    def __and__(self, other: Any) -> "Condition":
+        return Condition(lambda: self() and _is_visible(other))
+
+    def __or__(self, other: Any) -> "Condition":
+        return Condition(lambda: self() or _is_visible(other))
+
+    def __invert__(self) -> "Condition":
+        return Condition(lambda: not self())
+
+
+def show_if(
+    controller: Any,
+    *,
+    equals: Any = _MISSING,
+    not_equals: Any = _MISSING,
+    one_of: Any = None,
+    contains: Any = _MISSING,
+    test: Callable[[Any], bool] | None = None,
+) -> Condition:
+    """Visible when ``controller``'s value satisfies the rule.
+
+    With no rule it means "truthy" (a checked checkbox/switch, non-empty text,
+    a selected dropdown option...). Rules: ``equals``, ``not_equals``,
+    ``one_of`` (a collection), ``contains`` (for list values such as
+    multiselect) or ``test`` (any callable taking the value).
+
+    IMPORTANT: ``controller`` must live OUTSIDE the form's own batch -- define it
+    in an earlier cell and name it in the cell that calls ``create_form`` so
+    marimo re-runs that cell when it changes (see ``field(..., live=True)``
+    to still display it inside the form layout).
     """
 
-    def __init__(
-        self,
-        region_name: Optional[str] = None,
-        aws_access_key_id: Optional[str] = None,
-        aws_secret_access_key: Optional[str] = None,
-        aws_session_token: Optional[str] = None,
-        profile_name: Optional[str] = None,
-        endpoint_url: Optional[str] = None,
-    ):
-        session = boto3.session.Session(
-            region_name=region_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            profile_name=profile_name,
+    def check() -> bool:
+        v = controller.value
+        if equals is not _MISSING:
+            return v == equals
+        if not_equals is not _MISSING:
+            return v != not_equals
+        if one_of is not None:
+            return v in one_of
+        if contains is not _MISSING:
+            return v is not None and contains in v
+        if test is not None:
+            return bool(test(v))
+        return bool(v)
+
+    return Condition(check)
+
+
+def _is_visible(rule: Any) -> bool:
+    """bool | Condition | zero-arg callable | None  ->  bool (None = visible)."""
+    if rule is None:
+        return True
+    return bool(rule()) if callable(rule) else bool(rule)
+
+
+@dataclass
+class Placement:
+    span: int = 1
+    col: int | None = None
+    row: int | None = None
+
+
+@dataclass
+class Field:
+    """A single input component plus presentation options."""
+
+    component: Any
+    label: str | None = None
+    hint: str | None = None
+    span: int = 1
+    col: int | None = None
+    row: int | None = None
+    style: dict[str, str] | None = None  # extra CSS on the field's wrapper
+    visible_when: Any = None             # bool | Condition | callable
+    live: bool = False                   # display only; value is read from the component itself
+
+
+@dataclass
+class Group:
+    """A titled (or untitled) section holding fields and/or nested groups."""
+
+    title: str | None
+    items: dict[str, "Field | Group | Any"]
+    description: str | None = None
+    columns: int = 1
+    layout: str = "grid"             # grid | row | stack
+    collapsible: bool = False
+    collapsed: bool = False
+    bordered: bool = True
+    span: int = 1
+    col: int | None = None
+    row: int | None = None
+    theme: Mapping[str, Any] | Theme | str | None = None  # overrides, inherited by children
+    style: dict[str, str] | None = None        # CSS for the group container
+    title_style: dict[str, str] | None = None  # CSS for the group title
+    body_style: dict[str, str] | None = None   # CSS for the group body (grid)
+    visible_when: Any = None                   # bool | Condition | callable
+
+
+def field(
+    component: Any,
+    *,
+    label: str | None = None,
+    hint: str | None = None,
+    span: int = 1,
+    col: int | None = None,
+    row: int | None = None,
+    style: dict[str, str] | None = None,
+    visible_when: Any = None,
+    live: bool = False,
+) -> Field:
+    """Wrap a component to control its placement, add a label/hint, or style it.
+
+    visible_when : ``show_if(...)`` condition, bool or zero-arg callable; the
+        field is omitted from the form (and from ``.value``) while false.
+    live : the component is shown in the layout but is NOT part of the form's
+        batch/submit, so its value updates immediately and can drive
+        ``visible_when`` rules. Use this for the controlling checkbox/dropdown.
+        Its value is included by ``form_values()``.
+    """
+    return Field(component, label, hint, span, col, row, style, visible_when, live)
+
+
+def group(
+    title: str | None,
+    items: dict[str, Any],
+    *,
+    description: str | None = None,
+    columns: int = 1,
+    layout: str = "grid",
+    collapsible: bool = False,
+    collapsed: bool = False,
+    bordered: bool = True,
+    span: int = 1,
+    col: int | None = None,
+    row: int | None = None,
+    theme: Mapping[str, Any] | Theme | str | None = None,
+    style: dict[str, str] | None = None,
+    title_style: dict[str, str] | None = None,
+    body_style: dict[str, str] | None = None,
+    visible_when: Any = None,
+) -> Group:
+    """Create a group; groups can be nested inside other groups via ``items``.
+
+    ``items`` maps a name to a component, a ``field(...)`` or another ``group(...)``.
+    For nested groups the name is the key under which the group's values
+    appear in ``form_values(form)``.
+
+    visible_when : hide the whole group (and everything nested in it) unless
+        the condition holds -- see ``show_if``.
+    """
+    if layout not in ("grid", "row", "stack"):
+        raise ValueError("layout must be 'grid', 'row' or 'stack'")
+    if columns < 1:
+        raise ValueError("columns must be >= 1")
+    return Group(
+        title, dict(items), description, columns, layout, collapsible, collapsed,
+        bordered, span, col, row, theme, style, title_style, body_style,
+        visible_when,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Rendering helpers (inline CSS only -> no braces, safe for batch templating)
+# --------------------------------------------------------------------------- #
+def _css(props: Mapping[str, str | None] | None) -> str:
+    if not props:
+        return ""
+    return ";".join(f"{k.replace('_', '-')}:{v}" for k, v in props.items() if v is not None)
+
+
+def _esc(text: str) -> str:
+    """HTML-escape and protect braces (the batch template uses str.format)."""
+    return _html.escape(text).replace("{", "&#123;").replace("}", "&#125;")
+
+
+def _style(*parts: str | Mapping[str, str] | None) -> str:
+    out = []
+    for p in parts:
+        if not p:
+            continue
+        out.append(p if isinstance(p, str) else _css(p))
+    return _html.escape(";".join(s for s in out if s), quote=True)
+
+
+def _placement_css(span: int, col: int | None, row: int | None) -> str:
+    parts = []
+    if col is not None:
+        parts.append(f"grid-column:{col} / span {max(1, span)}")
+    elif span > 1:
+        parts.append(f"grid-column:span {span}")
+    if row is not None:
+        parts.append(f"grid-row:{row}")
+    return ";".join(parts)
+
+
+_ALIGN_FLEX = {"left": "flex-start", "center": "center", "right": "flex-end", "stretch": "stretch"}
+
+
+class _Ctx:
+    """Collects components while rendering the HTML template."""
+
+    def __init__(self) -> None:
+        self.components: dict[str, Any] = {}   # inside the batch
+        self.live: dict[str, Any] = {}         # displayed, but outside the batch
+        self.names: set[str] = set()
+
+    def claim(self, name: str) -> None:
+        if not isinstance(name, str) or not name.isidentifier():
+            raise ValueError(
+                f"Field name {name!r} must be a valid Python identifier (letters, digits, _)."
+            )
+        if name in self.names:
+            raise ValueError(f"Duplicate field name {name!r}: names must be unique in a form.")
+        self.names.add(name)
+
+
+def _render_field(
+    name: str, item: Any, theme: Theme, ctx: _Ctx, active: bool = True
+) -> str:
+    """Returns the field's HTML ('' when hidden). Always claims the name."""
+    fld = item if isinstance(item, Field) else Field(item)
+    if not hasattr(fld.component, "_repr_html_") and not hasattr(fld.component, "text"):
+        raise TypeError(
+            f"Item {name!r} is not a marimo component, field(...) or group(...): {type(fld.component)}"
         )
-        self.region_name = session.region_name
-        self.client = session.client("s3", endpoint_url=endpoint_url)
-        self.resource = session.resource("s3", endpoint_url=endpoint_url)
+    ctx.claim(name)
+    if not active or not _is_visible(fld.visible_when):
+        return ""
 
-    # ------------------------------------------------------------------
-    # Bucket operations
-    # ------------------------------------------------------------------
-    def list_buckets(self) -> List[str]:
-        """Return the names of all buckets owned by the account."""
-        try:
-            response = self.client.list_buckets()
-            return [b["Name"] for b in response.get("Buckets", [])]
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to list buckets: {e}") from e
+    if fld.live:
+        ctx.live[name] = fld.component
+        # Embed the live element's own HTML; escape braces for str.format.
+        placeholder = fld.component.text.replace("{", "{{").replace("}", "}}")
+    else:
+        ctx.components[name] = fld.component
+        placeholder = "{" + name + "}"
+    pieces: list[str] = []
+    if fld.label:
+        label_css = f"font-size:{theme.label_size};font-weight:500;color:{theme.text_color}"
+        if theme.label_position == "left":
+            label_css += f";flex:0 0 {theme.label_width};padding-top:6px"
+        pieces.append(f'<label style="{_style(label_css)}">{_esc(fld.label)}</label>')
+    pieces.append(f'<div style="min-width:0;flex:1 1 auto">{placeholder}</div>')
 
-    def bucket_exists(self, bucket_name: str) -> bool:
-        """Check whether a bucket exists and is accessible."""
-        try:
-            self.client.head_bucket(Bucket=bucket_name)
-            return True
-        except ClientError as e:
-            code = e.response["Error"]["Code"]
-            if code in ("404", "NoSuchBucket", "NotFound"):
-                return False
-            if code in ("403", "AccessDenied"):
-                logger.warning("Bucket %s exists but access is denied", bucket_name)
-                return True
-            raise S3ManagerError(f"Failed to check bucket {bucket_name}: {e}") from e
+    hint_html = ""
+    if fld.hint:
+        hint_html = (
+            f'<div style="{_style(f"font-size:{theme.hint_size};color:{theme.muted_color}")}">'
+            f"{_esc(fld.hint)}</div>"
+        )
 
-    def create_bucket(self, bucket_name: str, region: Optional[str] = None) -> None:
-        """Create a bucket. Handles the us-east-1 LocationConstraint quirk."""
-        region = region or self.region_name or "us-east-1"
-        try:
-            if region == "us-east-1":
-                self.client.create_bucket(Bucket=bucket_name)
-            else:
-                self.client.create_bucket(
-                    Bucket=bucket_name,
-                    CreateBucketConfiguration={"LocationConstraint": region},
-                )
-            logger.info("Created bucket %s in %s", bucket_name, region)
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to create bucket {bucket_name}: {e}") from e
+    if fld.label and theme.label_position == "left":
+        inner = f'<div style="display:flex;gap:12px;align-items:flex-start">{"".join(pieces)}</div>'
+    else:
+        inner = f'<div style="display:flex;flex-direction:column;gap:4px">{"".join(pieces)}</div>'
 
-    def delete_bucket(self, bucket_name: str, force: bool = False) -> None:
-        """Delete a bucket. With force=True, empties it first (including versions)."""
-        try:
-            if force:
-                self.empty_bucket(bucket_name)
-            self.client.delete_bucket(Bucket=bucket_name)
-            logger.info("Deleted bucket %s", bucket_name)
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to delete bucket {bucket_name}: {e}") from e
+    if hint_html:
+        inner = (hint_html + inner) if theme.hint_position == "above" else (inner + hint_html)
 
-    def empty_bucket(self, bucket_name: str) -> None:
-        """Delete all objects (and object versions) in a bucket."""
-        try:
-            bucket = self.resource.Bucket(bucket_name)
-            bucket.objects.all().delete()
-            bucket.object_versions.all().delete()
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to empty bucket {bucket_name}: {e}") from e
-
-    # ------------------------------------------------------------------
-    # Object operations
-    # ------------------------------------------------------------------
-    def upload_file(
-        self,
-        local_path: str,
-        bucket_name: str,
-        key: Optional[str] = None,
-        extra_args: Optional[Dict] = None,
-    ) -> str:
-        """Upload a local file. Returns the object key used.
-
-        extra_args example: {"ContentType": "image/png", "ACL": "private"}
-        """
-        if not os.path.isfile(local_path):
-            raise FileNotFoundError(f"Local file not found: {local_path}")
-        key = key or os.path.basename(local_path)
-        try:
-            self.client.upload_file(local_path, bucket_name, key, ExtraArgs=extra_args)
-            logger.info("Uploaded %s to s3://%s/%s", local_path, bucket_name, key)
-            return key
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to upload {local_path}: {e}") from e
-
-    def upload_bytes(
-        self,
-        data: bytes,
-        bucket_name: str,
-        key: str,
-        content_type: Optional[str] = None,
-    ) -> None:
-        """Upload in-memory bytes as an object."""
-        kwargs = {"Bucket": bucket_name, "Key": key, "Body": data}
-        if content_type:
-            kwargs["ContentType"] = content_type
-        try:
-            self.client.put_object(**kwargs)
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to upload bytes to {key}: {e}") from e
-
-    def download_file(
-        self, bucket_name: str, key: str, local_path: Optional[str] = None
-    ) -> str:
-        """Download an object to disk. Returns the local path."""
-        local_path = local_path or os.path.basename(key)
-        parent = os.path.dirname(local_path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        try:
-            self.client.download_file(bucket_name, key, local_path)
-            logger.info("Downloaded s3://%s/%s to %s", bucket_name, key, local_path)
-            return local_path
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to download {key}: {e}") from e
-
-    def get_object_bytes(self, bucket_name: str, key: str) -> bytes:
-        """Read an object's contents into memory."""
-        try:
-            response = self.client.get_object(Bucket=bucket_name, Key=key)
-            return response["Body"].read()
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to get {key}: {e}") from e
-
-    def get_object_text(
-        self, bucket_name: str, key: str, encoding: str = "utf-8"
-    ) -> str:
-        """Read an object's contents as text."""
-        return self.get_object_bytes(bucket_name, key).decode(encoding)
-
-    def delete_file(self, bucket_name: str, key: str) -> None:
-        """Delete a single object."""
-        try:
-            self.client.delete_object(Bucket=bucket_name, Key=key)
-            logger.info("Deleted s3://%s/%s", bucket_name, key)
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to delete {key}: {e}") from e
-
-    def delete_files(self, bucket_name: str, keys: List[str]) -> List[str]:
-        """Delete many objects (batched, 1000 per request). Returns failed keys."""
-        failed: List[str] = []
-        try:
-            for i in range(0, len(keys), 1000):
-                batch = [{"Key": k} for k in keys[i : i + 1000]]
-                response = self.client.delete_objects(
-                    Bucket=bucket_name, Delete={"Objects": batch, "Quiet": True}
-                )
-                failed.extend(err["Key"] for err in response.get("Errors", []))
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to delete objects: {e}") from e
-        return failed
-
-    def file_exists(self, bucket_name: str, key: str) -> bool:
-        """Check whether an object exists."""
-        try:
-            self.client.head_object(Bucket=bucket_name, Key=key)
-            return True
-        except ClientError as e:
-            if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
-                return False
-            raise S3ManagerError(f"Failed to check {key}: {e}") from e
-
-    def get_file_metadata(self, bucket_name: str, key: str) -> Dict:
-        """Return size, content type, last modified, ETag and user metadata."""
-        try:
-            r = self.client.head_object(Bucket=bucket_name, Key=key)
-            return {
-                "size": r["ContentLength"],
-                "content_type": r.get("ContentType"),
-                "last_modified": r["LastModified"],
-                "etag": r["ETag"].strip('"'),
-                "metadata": r.get("Metadata", {}),
-            }
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to get metadata for {key}: {e}") from e
-
-    def list_files(
-        self, bucket_name: str, prefix: str = "", max_items: Optional[int] = None
-    ) -> List[Dict]:
-        """List objects under a prefix (paginated). Returns key/size/last_modified."""
-        return list(self.iter_files(bucket_name, prefix, max_items))
-
-    def iter_files(
-        self, bucket_name: str, prefix: str = "", max_items: Optional[int] = None
-    ) -> Iterator[Dict]:
-        """Lazily iterate over objects under a prefix."""
-        paginator = self.client.get_paginator("list_objects_v2")
-        count = 0
-        try:
-            for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
-                for obj in page.get("Contents", []):
-                    yield {
-                        "key": obj["Key"],
-                        "size": obj["Size"],
-                        "last_modified": obj["LastModified"],
-                    }
-                    count += 1
-                    if max_items and count >= max_items:
-                        return
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to list files in {bucket_name}: {e}") from e
-
-    def copy_file(
-        self,
-        src_bucket: str,
-        src_key: str,
-        dest_bucket: str,
-        dest_key: Optional[str] = None,
-    ) -> None:
-        """Copy an object within or across buckets."""
-        dest_key = dest_key or src_key
-        try:
-            self.client.copy(
-                {"Bucket": src_bucket, "Key": src_key}, dest_bucket, dest_key
-            )
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to copy {src_key}: {e}") from e
-
-    def move_file(
-        self,
-        src_bucket: str,
-        src_key: str,
-        dest_bucket: str,
-        dest_key: Optional[str] = None,
-    ) -> None:
-        """Move an object (copy then delete the source)."""
-        self.copy_file(src_bucket, src_key, dest_bucket, dest_key)
-        self.delete_file(src_bucket, src_key)
-
-    def generate_presigned_url(
-        self,
-        bucket_name: str,
-        key: str,
-        expires_in: int = 3600,
-        method: str = "get_object",
-    ) -> str:
-        """Create a temporary URL. method: 'get_object' or 'put_object'."""
-        try:
-            return self.client.generate_presigned_url(
-                ClientMethod=method,
-                Params={"Bucket": bucket_name, "Key": key},
-                ExpiresIn=expires_in,
-            )
-        except ClientError as e:
-            raise S3ManagerError(f"Failed to presign {key}: {e}") from e
+    css = _style(
+        "display:flex;flex-direction:column;gap:4px;min-width:0",
+        _placement_css(fld.span, fld.col, fld.row),
+        fld.style,
+    )
+    return f'<div style="{css}">{inner}</div>'
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    s3 = S3Manager(region_name="us-east-1")
+def _render_group(
+    name: str | None, grp: Group, parent_theme: Theme, ctx: _Ctx, depth: int,
+    active: bool = True,
+) -> tuple[str, dict[str, Any]]:
+    """Returns (html, schema). A hidden group renders '' but still contributes
+    its names to the schema so ``form_values`` keeps a stable shape."""
+    theme = _resolve_theme(grp.theme, parent_theme)
+    active = active and _is_visible(grp.visible_when)
+    schema: dict[str, Any] = {}
+    children: list[str] = []
 
-    bucket = "my-example-bucket-12345"
-    if not s3.bucket_exists(bucket):
-        s3.create_bucket(bucket)
+    for key, item in grp.items.items():
+        if isinstance(item, Group):
+            if not isinstance(key, str) or not key.isidentifier():
+                raise ValueError(f"Group key {key!r} must be a valid Python identifier.")
+            child_html, child_schema = _render_group(key, item, theme, ctx, depth + 1, active)
+            schema[key] = child_schema
+            children.append(child_html)
+        else:
+            children.append(_render_field(key, item, theme, ctx, active))
+            schema[key] = None  # leaf
 
-    s3.upload_file("example.txt", bucket, "docs/example.txt")
-    print(s3.list_files(bucket, prefix="docs/"))
-    print(s3.get_object_text(bucket, "docs/example.txt"))
-    print(s3.generate_presigned_url(bucket, "docs/example.txt", expires_in=600))
-    s3.delete_file(bucket, "docs/example.txt")
+    if not active:
+        return "", schema
+
+    # body layout
+    if grp.layout == "grid":
+        body_css = f"display:grid;grid-template-columns:repeat({grp.columns},minmax(0,1fr));gap:{theme.gap};align-items:start"
+    elif grp.layout == "row":
+        body_css = f"display:flex;flex-wrap:wrap;gap:{theme.gap};align-items:flex-start"
+    else:  # stack
+        body_css = f"display:flex;flex-direction:column;gap:{theme.gap}"
+    body = f'<div style="{_style(body_css, grp.body_style)}">{"".join(children)}</div>'
+
+    # header
+    header = ""
+    title_css = _style(
+        f"font-size:{theme.group_title_size};font-weight:{theme.group_title_weight};"
+        f"text-align:{theme.group_title_align};color:{theme.text_color}",
+        grp.title_style,
+    )
+    desc = (
+        f'<div style="{_style(f"font-size:{theme.hint_size};color:{theme.muted_color};text-align:{theme.group_title_align}")}">'
+        f"{_esc(grp.description)}</div>"
+        if grp.description else ""
+    )
+
+    # container
+    container_css = _style(
+        _placement_css(grp.span, grp.col, grp.row),
+        "min-width:0",
+        (
+            f"background:{theme.group_background};"
+            f"border:{theme.group_border_width} {theme.border_style} {theme.group_border_color};"
+            f"border-radius:{theme.group_radius};padding:{theme.group_padding}"
+            if grp.bordered else ""
+        ),
+        grp.style,
+    )
+
+    if grp.collapsible and grp.title:
+        open_attr = "" if grp.collapsed else " open"
+        summary_css = _style(title_css, "cursor:pointer;list-style-position:inside")
+        inner = (
+            f'<details{open_attr}><summary style="{summary_css}">{_esc(grp.title)}</summary>'
+            f'<div style="display:flex;flex-direction:column;gap:{theme.gap};margin-top:{theme.gap}">'
+            f"{desc}{body}</div></details>"
+        )
+    else:
+        if grp.title:
+            header = f'<div style="{title_css}">{_esc(grp.title)}</div>'
+        inner = (
+            f'<div style="display:flex;flex-direction:column;gap:{theme.gap}">'
+            f"{header}{desc}{body}</div>"
+        )
+    return f'<div style="{container_css}">{inner}</div>', schema
+
+
+# --------------------------------------------------------------------------- #
+# Public: create_form
+# --------------------------------------------------------------------------- #
+def create_form(
+    items: Mapping[str, Any],
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    columns: int = 1,
+    layout: str = "grid",
+    theme: "Theme | str | Mapping[str, Any] | None" = "default",
+    style: dict[str, str] | None = None,
+    title_style: dict[str, str] | None = None,
+    submit: bool = True,
+    submit_label: str = "Submit",
+    show_clear_button: bool = False,
+    clear_on_submit: bool = False,
+    submit_tooltip: str | None = None,
+    validate: Any = None,
+    bordered: bool = True,
+) -> Any:
+    """Build a formatted form from input components and groups.
+
+    Parameters
+    ----------
+    items : mapping of name -> component | field(...) | group(...)
+        Order is preserved. Nested groups may contain further groups.
+    title, description : header text.
+    columns, layout : grid layout of the top-level items (see ``group``).
+    theme : Theme instance, preset name ("default", "minimal", "compact",
+        "soft") or a dict of overrides applied to the default theme.
+        To start from a preset and tweak it use ``THEMES["soft"].with_(gap="8px")``.
+    style, title_style : extra raw CSS dicts for the card / title,
+        e.g. ``style={"max_width": "640px", "margin": "0 auto"}``.
+    submit : wrap in a marimo form with a submit button (``.value`` is None
+        until submitted). With ``submit=False`` the value updates live.
+    bordered : draw the outer card (border, background, shadow, padding).
+    validate : optional callable(value_dict) -> error string | None, run on
+        submit (marimo's form validation).
+
+    Returns
+    -------
+    A marimo UI element. Assign it to a variable, display it, and read
+    ``.value`` (flat dict) or ``form_values(el)`` (nested dict) elsewhere.
+    """
+    base = _resolve_theme(theme, THEMES["default"])
+    ctx = _Ctx()
+
+    root = Group(None, dict(items), columns=columns, layout=layout, bordered=False)
+    body_html, schema = _render_group(None, root, base, ctx, 0)
+
+    header = ""
+    if title or description:
+        h_css = _style(
+            f"text-align:{base.title_align};"
+            + (f"padding-bottom:10px;border-bottom:1px solid {base.border_color};" if base.divider_under_title else "")
+        )
+        t = (
+            f'<div style="{_style(f"font-size:{base.title_size};font-weight:{base.title_weight};color:{base.text_color}", title_style)}">{_esc(title)}</div>'
+            if title else ""
+        )
+        d = (
+            f'<div style="{_style(f"font-size:{base.description_size};color:{base.muted_color};margin-top:4px")}">{_esc(description)}</div>'
+            if description else ""
+        )
+        header = f'<div style="{h_css}">{t}{d}</div>'
+
+    card_css = _style(
+        f"display:flex;flex-direction:column;gap:{base.section_gap};"
+        f"font-family:{base.font_family};color:{base.text_color};max-width:{base.max_width};"
+        "box-sizing:border-box;width:100%",
+        (
+            f"background:{base.background};"
+            f"border:{base.border_width} {base.border_style} {base.border_color};"
+            f"border-radius:{base.radius};box-shadow:{base.shadow};padding:{base.padding}"
+            if bordered else ""
+        ),
+        style,
+    )
+    template = f'<div style="{card_css}">{header}{body_html}</div>'
+
+    if not ctx.components:
+        raise ValueError(
+            "The form has no visible input components right now (everything is hidden "
+            "or marked live=True). Keep at least one visible, non-live field."
+        )
+    batch = mo.Html(template).batch(**ctx.components)
+
+    if submit:
+        element = batch.form(
+            submit_button_label=submit_label,
+            show_clear_button=show_clear_button,
+            clear_on_submit=clear_on_submit,
+            bordered=False,
+            submit_button_tooltip=submit_tooltip,
+            validate=validate,
+        )
+    else:
+        element = batch
+
+    # Remember the group structure so form_values() can nest the flat value.
+    element._form_schema = schema  # type: ignore[attr-defined]
+    element._form_live = dict(ctx.live)  # type: ignore[attr-defined]
+    return element
+
+
+# --------------------------------------------------------------------------- #
+# Public: form_values
+# --------------------------------------------------------------------------- #
+def form_values(form: Any, *, nested: bool = True) -> dict[str, Any] | None:
+    """Return the form's values; nested to mirror the groups by default.
+
+    * Returns ``None`` if the form has a submit button that hasn't been clicked.
+    * Fields currently hidden by ``visible_when`` appear as ``None`` so the
+      shape of the result never changes.
+    * ``live=True`` fields are included with their current value.
+    """
+    value = form.value
+    if value is None:
+        return None
+    live = getattr(form, "_form_live", {})
+    flat = dict(value)
+    flat.update({k: c.value for k, c in live.items()})
+
+    schema = getattr(form, "_form_schema", None)
+    if schema is None:
+        return flat
+
+    def build(sch: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: build(sub) if isinstance(sub, dict) else flat.get(key)
+            for key, sub in sch.items()
+        }
+
+    if nested:
+        return build(schema)
+
+    def names(sch: Mapping[str, Any]) -> list[str]:
+        out: list[str] = []
+        for key, sub in sch.items():
+            out.extend(names(sub) if isinstance(sub, dict) else [key])
+        return out
+
+    return {k: flat.get(k) for k in names(schema)}
